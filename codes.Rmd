@@ -1,0 +1,335 @@
+---
+title: "Total public construction"
+author: "Gizem Cemile Çelik & İrem Ekmekçi 's project"
+output: word_document
+---
+
+```{r}
+PBNRESCONS <- ts(read.csv("PBNRESCONS.csv"),start = 2002,frequency = 12)
+data<-ts(PBNRESCONS[,2],start=2002,frequency = 12)
+data
+```
+
+
+#2
+```{r}
+par(mfrow=c(3,1))
+plot(data)
+acf(as.numeric(data))
+pacf(as.numeric(data))
+#plot shows an increasing trend. ACF shows slow decay that is an indication of being non-stationarity. Also, we know that since our data set is monthly, it is seasonal.
+```
+
+#3
+
+```{r}
+data_train=window(data,start = 2002,end=c(2018,9),frequency = 12)
+data_train
+data_test=window(data,start=c(2018,10),end=c(2019,9),frequency=12)
+data_test
+
+library(TSA)
+par(mfrow=c(3,1))
+plot(data_train)
+acf(as.numeric(data_train))
+pacf(as.numeric(data_train))
+#plot shows an increasing trend. ACF shows slow decay that is an indication of being non-stationarity. Also, we know that since our data set is monthly, it is seasonal.
+```
+
+#4
+```{r}
+library(forecast)
+lambda <- BoxCox.lambda(data_train)
+lambda # lambda is not equal to one, so we need to use transformed data
+train_t=BoxCox(data_train,lambda)
+par(mfrow=c(3,1))
+plot(train_t)
+acf(as.numeric(train_t))
+pacf(as.numeric(train_t))
+#after transforming the data, the plot still shows an increasing trend. ACF shows slow decay that is an indication of being non-stationarity.
+```
+
+#5 
+```{r}
+library(chron)
+time=as.chron(train_t)
+time
+time1=as.Date(time,format="%d-%b-%y") #format is important.
+time1
+#After this we convert our train data which is ts object into data frame.
+train_bc_anomaly=data.frame(trainbc=train_t)
+head(train_bc_anomaly)
+#Then, add time1 object as rownames to data frame created for anomaly detection.
+rownames(train_bc_anomaly)=time1
+head(train_bc_anomaly)
+library(anomalize) #tidy anomaly detection
+library(tidyverse) #tidyverse packages like dplyr, ggplot, tidyr
+train_bc_anomaly_ts <- train_bc_anomaly %>% rownames_to_column() %>% as.tibble() %>% 
+  mutate(date = as.Date(rowname)) %>% select(-one_of('rowname'))
+head(train_bc_anomaly_ts)
+#The dataset is prepared for the anomaly detection.
+train_bc_anomaly_ts %>% 
+  time_decompose(trainbc, method = "stl", frequency = "auto", trend = "auto") %>%
+  anomalize(remainder, method = "gesd", alpha = 0.05, max_anoms = 0.2) %>%
+  plot_anomaly_decomposition()
+train_bc_clean=tsclean(train_t)
+train_bc_clean
+```
+
+
+#6 
+
+```{r}
+par(mfrow=c(3,1))
+plot(train_t)
+acf(as.numeric(train_t))
+pacf(as.numeric(train_t))
+
+#I should test whether it has unit root or not.
+#KPSS
+library(tseries)
+kpss.test(train_bc_clean,null=c("Level"))
+#H0:stationary.Since p-value is less than 0.05, we reject H0 and we can say that the series is not stationary
+kpss.test(train_bc_clean,null=c("Trend"))
+#H0: There is a deterministic trend. H1: There is a stochastic trend.Since p-value is less than 0.05, we reject H0 and we can say that there is a stochastic trend.
+#ADF
+library(fUnitRoots)
+adfTest(train_bc_clean, lags=1, type="c") #I select lag 1 because of PACF. In PACF only 1st lag is significant. #Because time series plot of the process shows that the mean of the system is not 0 or close to 0. In such cases, we will prefer to use this test with c.
+#Ho: The process has unit root (non-stationary). H1: The process is stationary.Since p value is greater than 0.05, we fail to reject H0. It means that we don’t have enough evidence to claim that we have a stationary system.
+adfTest(train_bc_clean, lags=1, type="ct") #"ct" is prefered because intercept and time trend exist.
+#Our process has unit root.According to ADF, our process has unit root. 
+#As a result, It means we have a non-stationary series with stochastic trend. To remove the trend, we apply differencing using diff function later.
+library(tseries)
+pp.test(train_bc_clean)
+#Ho: The process has unit root (non-stationary). H1: The process is stationary.Since p value is greater than 0.05, we fail to reject H0. It means that we don’t have enough evidence to claim that we have a stationary system.
+#Kpss, ADF and PP Tests show that there is a unit root problem in the system.
+#To solve this,take the difference.
+
+#HEGY Test
+library(pdR)
+HEGY.test(train_bc_clean,itsd=c(1,1,c(1:11)),regvar=0,selectlags=list(mode="aic",Pmax=8))
+#In this output, we will use p value of t_1 for regular unit root and use the p value of F_11:12 for testing seasonal unit root.
+#The output shows that the system does not have regular unit roota nd seasonal unit root because p value of t_1 is less than 0.05 and f_11:12 is less than 0.05
+#Canova-Hensen Test
+library(uroot)
+ch.test(train_bc_clean,type = "dummy",sid=c(1:12))
+#according to Canova Hensen test,we do not have a seasonal unit root problem
+```
+packageurl <- "https://www.rdocumentation.org/packages/tcltk"
+install.packages(packageurl, repos=NULL, type="source")
+
+#7  
+```{r}
+library(forecast)
+ndiffs(train_bc_clean)
+dtrain=diff(train_bc_clean) #regular difference
+nsdiffs(diff(train_bc_clean))#no need to seasonal difference
+plot(dtrain,main="Time Series Plot of the Differenced Data",col="red")
+# seems stationary but let's check it with kpss test
+kpss.test(dtrain,null=c("Level"))
+#Since the p-value is greater than 0.05,the process is stationary
+hegy.test(dtrain)
+#there is no regular unit root and no seasonal unit root
+```
+
+#8
+```{r}
+par(mfrow=c(2,1))
+acf(as.vector(dtrain),main="ACF Of Differenced Data",col="red",lag.max = 36)
+pacf(as.vector(dtrain),main="PACF Of  Differenced Data",col="red",lag.max = 36)
+#By looking at ACF and PACF plots,we can suggest SARIMA(0,1,0)(2,0,2)[12]
+```
+
+```{r}
+library(TSA)
+#ESACF Table
+eacf(dtrain)
+#From ESACF table,we can suggest ARIMA(3,1,3)
+```
+
+```{r}
+library(caschrono)
+armaselect(dtrain)#MINIC Table
+#From MINIC table,we can suggest ARIMA(2,1,0)
+```
+
+```{r}
+library(forecast)
+auto.arima(train_bc_clean)
+#ARIMA(1,1,1)(2,0,2)[12]
+```
+
+#9
+```{r}
+#SARIMA(0,1,0)(2,0,2)[12]
+#ARIMA(3,1,1)
+#ARIMA(2,1,0)
+#SARIMA(1,1,1)(2,0,2)[12]
+```
+
+#10
+```{r}
+
+fit1<-Arima(train_bc_clean,order = c(0, 1, 0),seasonal=list(order=c(2,0,2),period=12))
+summary(fit1)
+ratio_sar2=-0.1632/0.3393
+ratio_sar2
+ratio_sma2=-0.0815/0.3395
+ratio_sma2
+#the model is insignificant
+```
+
+```{r}
+fit2<-Arima(train_bc_clean,order = c(3, 1, 3))
+summary(fit2)
+ratio_ar3=-0.1609/0.3899
+ratio_ar3
+ratio_ma3=-0.0318/0.4291
+ratio_ma3
+#Since both AR3 and MA1 are in the inerval (-2,2),the model is insignificant
+```
+
+```{r}
+fit3<-Arima(train_bc_clean,order = c(2, 1, 0))
+summary(fit3)
+ratio_ar2=-0.1066/0.0721
+ratio_ar2
+#the model is insignificant
+```
+
+```{r}
+fit4<-Arima(train_bc_clean,order = c(1, 1, 1),seasonal=list(order=c(2,0,2),period=12))
+summary(fit4)
+ratio_ar1=-0.0525/0.0046
+ratio_ar1
+ratio_ma1=0.0276/ 0.0131
+ratio_ma1
+ratio_sar2=-0.2488/0.0100
+ratio_sar2
+ratio_sma2=0.0743/0.0079
+ratio_sma2
+#When each parameter estimates is divided by their standard errors,it is understood that the approximated test statistics are greater than 2 for all parameters. That's why, it is said that the model is significant
+```
+
+#11
+Since only SARIMA(1,1,1)(2,0,2)[12] model is significant, we continue diagnoctic check with this model.
+##a
+```{r}
+plot(y=resid(fit4),x=as.vector(time(data_train)), ylab='Residuals',xlab='Time',type='o')
+abline(h=0)
+#It seems that the residuals seems stationary around zero. 
+par(mfrow=c(1,2))
+r=resid(fit4)
+acf(r)
+pacf(r)
+#standardized residuals vs time
+Standard.res=rstandard(fit4)
+plot(y=Standard.res,x=as.vector(time(data_train)), ylab='Standardized Residuals',xlab='Time',type='o')
+#They are scattered around zero and it can be interpreted as zero mean.
+
+```
+
+##b
+```{r}
+#QQ Plot
+qqnorm(r)
+qqline(r)
+#Since the points fall aproximately along the qq-line, we can say that residuals are normally distributed
+
+#Histogram
+hist(r,main="Histogram of Residuals",breaks=20)
+#The histogram of residual shows that they might have a normal distribution with outliers.
+
+#Shapiro-Wilk test & Jarque-Bera test
+#Ho: Residuals have normal distribution.
+#H1: Residuals don't have normal distribution.
+shapiro.test(r)
+library(tseries)
+jarque.bera.test(r)
+#p-values are grater than 0.05, so fail to reject H0.
+#We have enough evidence to claim that residuals have normal distribution.
+```
+
+##c
+```{r}
+#Breusch-Godfrey Test
+library(TSA)
+library(lmtest)
+m = lm(r ~ 1+zlag(r))
+bgtest(m,order=15)
+#Since p value is greater than α=0.05, we have 95% confident that the residuals of the model are uncorrelated, according to results of Breusch-Godfrey Test.
+```
+
+##d
+```{r}
+#Check Heteroscedasticity
+rr=r^2
+par(mfrow=c(1,2))
+acf(as.vector(rr),main="ACF of Squared Residuals") 
+pacf(as.vector(rr),main="PACF of Squared Residuals")
+#Both plots shows that there is no spike out of the white noise bands that is an indication of homoscedasticity
+
+#Breusch-Pagan
+m = lm(r ~ data_train+zlag(data_train)+zlag(data_train,2))
+bptest(m)
+
+#White Test
+m = lm(r ~ data_train+zlag(data_train)+zlag(data_train,2)+zlag(data_train)^2+zlag(data_train,2)^2+zlag(data_train)*zlag(data_train,2))
+bptest(m)
+#All tests show that there is no heteroscedasticity problem.
+```
+
+
+#12
+##a
+```{r}
+#arimafit
+forecast1=forecast(fit4,h=12)
+forecast1
+plot(forecast1)
+```
+##b
+```{r}
+#ets
+model2<-ets(train_t,model="ZZZ")
+forecast2=forecast(model2,h=12)
+plot(forecast2)
+```
+##c
+```{r}
+#nnetar
+model3=nnetar(train_t)
+forecast3<-forecast(model3,h=12,PI=T)
+plot(forecast3)
+```
+#13
+```{r}
+forecast_for_sarima_t=InvBoxCox(as.numeric(forecast1$mean),lambda=lambda)
+forecast_for_ets_t=InvBoxCox(as.numeric(forecast2$mean),lambda)
+forecast_for_nnar_t=InvBoxCox(as.numeric(forecast3$mean),lambda)
+```
+
+#14
+```{r}
+accuracy(forecast_for_sarima_t,data_test)#Accuracy for SARIMA
+accuracy(forecast_for_ets_t,data_test)#Accuracy for ETS
+accuracy(forecast_for_nnar_t,data_test)#Accuracy for NNAR
+#MApe value of ETS is the lowest,so it is the best technique to forecast
+```
+
+#15
+```{r}
+#For SARIMA
+plot(forecast1)
+lines(fit4$fitted,col="red",lty=3)
+legend("bottomright",c("Actual","Fitted"),col=c("black","red"),lty = c(1,3))
+#For ETS
+plot(forecast2)
+lines(model2$fitted,col="red",lty=3)
+legend("bottomright",c("Actual","Fitted"),col=c("black","red"),lty = c(1,3))
+#For NNAR
+plot(forecast3)
+lines(model3$fitted,col="red",lty=3)
+legend("bottomright",c("Actual","Fitted"),col=c("black","red"),lty = c(1,3))
+```
+
